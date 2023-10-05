@@ -83,7 +83,7 @@ st.markdown(
     "and not meant to handle every edge case.  Please feel free to report any issues (or open up a PR to fix)."
 )
 
-api_key = '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'
+api_key = st.secrets["openai_key"]
 
 question = st.text_input(
     label="Ask a question",
