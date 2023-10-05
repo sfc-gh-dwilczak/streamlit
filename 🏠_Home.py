@@ -1,83 +1,165 @@
-# stdlib
-import json
-
-# third party
-import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
+
 
 # first party
-from client import get_connection_attributes, submit_request
-from queries import GRAPHQL_QUERIES
+from client import get_connection_attributes
+
+from functions import prepare_app
+
+# first party
+import os
+
+# third party
+import streamlit as st
+from langchain.chains import LLMChain
+from langchain.prompts import PromptTemplate
+from langchain.llms import OpenAI
+from langchain.output_parsers import PydanticOutputParser
+from langchain.prompts.few_shot import FewShotPromptTemplate
+from langchain.schema.output_parser import OutputParserException
+from pydantic.v1.error_wrappers import ValidationError
 
         
-def prepare_app():
-    
-    with st.spinner(f'Gathering Metrics...'):
-        payload = {'query': GRAPHQL_QUERIES['metrics']}
-        json = submit_request(st.session_state.conn, payload)
-        try:
-            metrics = json['data']['metrics']
-        except TypeError:
-            
-            # `data` is None and there may be an error
-            try:
-                error = json['errors'][0]['message']
-                st.error(error)
-            except (KeyError, TypeError):
-                st.warning(
-                    'No metrics returned.  Ensure your project has metrics defined '
-                    'and a production job has been run successfully.'
-                )
-        else:
-            st.session_state.metric_dict = {m['name']: m for m in metrics}
-            st.session_state.dimension_dict = {dim['name']: dim for metric in metrics for dim in metric['dimensions']}
-            for metric in st.session_state.metric_dict:
-                st.session_state.metric_dict[metric]['dimensions'] = [
-                    d['name'] for d in st.session_state.metric_dict[metric]['dimensions']
-                ]
-            if not st.session_state.metric_dict:
-                # Query worked, but nothing returned
-                st.warning(
-                    'No Metrics returned!  Ensure your project has metrics defined '
-                    'and a production job has been run successfully.'
-                )
-            else:
-                st.success('Success!  Explore the rest of the app!')
-
-
 st.set_page_config(
     page_title="dbt Semantic Layer - Home",
     page_icon="👋",
     layout='wide',
 )
 
-st.markdown('# Explore the dbt Semantic Layer')
+jdbc_url = "jdbc:arrow-flight-sql://semantic-layer.cloud.getdbt.com:443?environmentId=235903&token=dbtc_e_imCjQRwf8EQh_0b5V5P20L7oiPj2LDQnXUgJEXHDdbC26RyE"
+
+st.session_state.conn = get_connection_attributes(jdbc_url)
+if 'conn' in st.session_state and st.session_state.conn is not None:
+    prepare_app()
+
+
+st.markdown('# Explore the dbt Semantic Layer with OpenAI')
+
+if "conn" not in st.session_state or st.session_state.conn is None:
+    st.warning("Go to home page and enter your JDBC URL")
+    st.stop()
+
+if "metric_dict" not in st.session_state:
+    st.warning(
+        "No metrics found.  Ensure your project has metrics defined and a production "
+        "job has been run successfully."
+    )
+    st.stop()
+
+
+# first party
+from client import submit_request
+from helpers import to_arrow_table
+from llm.examples import EXAMPLES
+from llm.prompt import EXAMPLE_PROMPT
+from llm.schema import Query
+from queries import GRAPHQL_QUERIES
+
+
+metrics = ", ".join(list(st.session_state.metric_dict.keys()))
+dimensions = ", ".join(list(st.session_state.dimension_dict.keys()))
+
+parser = PydanticOutputParser(pydantic_object=Query)
+
+prompt_example = PromptTemplate(
+    template=EXAMPLE_PROMPT,
+    input_variables=["metrics", "dimensions", "question", "result"],
+)
+
+prompt = FewShotPromptTemplate(
+    examples=EXAMPLES,
+    example_prompt=prompt_example,
+    prefix="""Given a question involving a user's data, transform it into a structured object.
+    {format_instructions}
+    """,
+    suffix="Metrics: {metrics}\nDimensions: {dimensions}\nQuestion: {question}\nResult:\n",
+    input_variables=["metrics", "dimensions", "question"],
+    partial_variables={"format_instructions": parser.get_format_instructions()},
+)
+
 
 st.markdown(
-    """
-    Use this app to query and view the metrics defined in your dbt project. It's important to note that this app assumes that you're using the new
-    Semantic Layer, powered by [MetricFlow](https://docs.getdbt.com/docs/build/about-metricflow).  The previous semantic layer used the `dbt_metrics`
-    package, which has been deprecated and is no longer supported for `dbt-core>=1.6`.
-    
-    ---
-    
-    To get started, input your `JDBC_URL` below.  You can find this in your project settings when setting up the Semantic Layer.
-    After hitting Enter, wait until a success message appears indicating that the application has successfully retrieved your project's metrics information.
-    """
+    "**This is highly experimental** "
+    "and not meant to handle every edge case.  Please feel free to report any issues (or open up a PR to fix)."
 )
 
+api_key = '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'
 
-jdbc_url = st.text_input(
-    label='JDBC URL',
-    value='',
-    key='jdbc_url',
-    help='JDBC URL is found when configuring the semantic layer at the project level',
+question = st.text_input(
+    label="Ask a question",
+    placeholder="e.g. What is total revenue?",
+    key="question",
 )
 
-if st.session_state.jdbc_url != '':
-    st.cache_data.clear()
-    st.session_state.conn = get_connection_attributes(st.session_state.jdbc_url)
-    if 'conn' in st.session_state and st.session_state.conn is not None:
-        prepare_app()
+if question:
+    input = prompt.format(
+        metrics=metrics,
+        dimensions=dimensions,
+        question=question,
+    )
+    try:
+        llm = OpenAI(
+            openai_api_key=os.environ.get("OPENAI_API_KEY", api_key),
+            model_name="text-davinci-003",
+            temperature=0,
+        )
+    except ValidationError as e:
+        st.write(e)
+        st.stop()
+
+    chain = LLMChain(llm=llm, prompt=prompt)
+    output = chain.run(metrics=metrics, dimensions=dimensions, question=question)
+    try:
+        query = parser.parse(output)
+    except OutputParserException as e:
+        st.error(e)
+        st.stop()
+    statuses = ["pending", "running", "compiled", "failed", "successful"]
+
+    progress_bar = st.progress(0, "Submitting Query ... ")
+    payload = {"query": query.gql, "variables": query.variables}
+    json = submit_request(st.session_state.conn, payload)
+    try:
+        query_id = json["data"]["createQuery"]["queryId"]
+    except TypeError:
+        progress_bar.progress(80, "Query Failed!")
+        st.error(json["errors"][0]["message"])
+        st.stop()
+    while True:
+        query = GRAPHQL_QUERIES["get_results"]
+        payload = {"variables": {"queryId": query_id}, "query": query}
+        json = submit_request(st.session_state.conn, payload)
+        try:
+            data = json["data"]["query"]
+        except TypeError:
+            progress_bar.progress(80, "Query Failed!")
+            st.error(json["errors"][0]["message"])
+            st.stop()
+        else:
+            status = data["status"].lower()
+            if status == "successful":
+                progress_bar.progress(100, "Query Successful!")
+                break
+            elif status == "failed":
+                progress_bar.progress(
+                    (statuses.index(status) + 1) * 20, "red:Query Failed!"
+                )
+                st.error(data["error"])
+                st.stop()
+            else:
+                progress_bar.progress(
+                    (statuses.index(status) + 1) * 20,
+                    f"Query is {status.capitalize()}...",
+                )
+
+    df = to_arrow_table(data["arrowResult"])
+    df.columns = [col.lower() for col in df.columns]
+    tab1, tab2 = st.tabs(["Data", "SQL"])
+    with tab1:
+        st.dataframe(df, use_container_width=True)
+    with tab2:
+        st.code(data["sql"], language="sql")
+
+
+
 

@@ -4,7 +4,7 @@ Use this streamlit app to view the metrics you've defined in your project.  The 
 
 # Developing
 
-Clone the repo and run `poetry install`.  Activate the virtualenv created by running `poetry shell`
+Clone the repo and run `poetry install`.  Activate the virtualenv created by running `poetry shell` and `pip install langchain` and `pip install openai` for LLM to work.
 
 Finally, run your app:
 
