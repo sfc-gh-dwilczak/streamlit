@@ -110,12 +110,14 @@ all_dimensions = [
     if k in st.session_state.selected_metrics
 ]
 unique_dimensions = get_shared_elements(all_dimensions)
-dimensions = [dim.split('__')[-1] for dim in unique_dimensions]
+
+# I want to split tring but it actually uses the values.
+# dimensions = [dim.split('__')[-1] for dim in unique_dimensions]
 
 
 col2.multiselect(
     label='Select Dimension(s)',
-    options=sorted(dimensions),
+    options=sorted(unique_dimensions),
     default=None,
     key='selected_dimensions',
     placeholder='Select a dimension'
