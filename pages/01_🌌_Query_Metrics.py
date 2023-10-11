@@ -110,10 +110,12 @@ all_dimensions = [
     if k in st.session_state.selected_metrics
 ]
 unique_dimensions = get_shared_elements(all_dimensions)
+dimensions = [dim.split('__')[-1] for dim in unique_dimensions]
+
 
 col2.multiselect(
     label='Select Dimension(s)',
-    options=sorted(unique_dimensions),
+    options=sorted(dimensions),
     default=None,
     key='selected_dimensions',
     placeholder='Select a dimension'
@@ -224,18 +226,6 @@ col1.caption('If set to 0, no limit will be applied')
 slq = SemanticLayerQuery(st.session_state)
 jdbc_query = slq.jdbc_query
 graphql_query = slq.graphql_query
-tab1, tab2 = st.tabs(['GraphQL', 'JDBC'])
-code = f'''
-import requests
-
-
-url = 'https://cloud.getdbt.com/semantic-layer/api/graphql'
-query = \'\'\'{graphql_query}\'\'\'
-payload = {{'query': query, 'variables': {slq._gql["variables"]}}}
-response = requests.post(url, json=payload, headers={{'Authorization': 'Bearer ***'}})
-'''
-tab1.code(code, language='python')
-tab2.code(jdbc_query, language='sql')
 
 if st.button('Submit Query'):
     
